@@ -4,11 +4,11 @@ LFLAGS 	=	-lwpcap
 
 TARGET 	=	FuzzyWire.exe
 
-SRC 	=	FuzzyWire.cpp
+SRC 	=	FuzzyWire.cpp fwReconstruct.cpp
 OBJS 	=	$(SRC:.cpp=.o)
 
 $(OBJS) : $(SRC)
-	$(CC) $(CFLAGS) -c $(SRC) -o $(OBJS)
+	$(CC) $(CFLAGS) -c $(SRC)
 
 $(TARGET):	$(OBJS)
 	$(CC) -o $(TARGET) $(OBJS) $(LFLAGS)
