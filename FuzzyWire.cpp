@@ -5,7 +5,7 @@
  * Authors: Peter Bennion
  * 			Tyralyn Tran
  *
- * Version: v0.0000000000000000000001
+ * Version: v0.01
  *
  * Instructions for installing WinPcap + libs: http://www.codeproject.com/Articles/30234/Introduction-to-the-WinPcap-Networking-Libraries
  *		Don't forget to add pcap library to PATH!
@@ -17,107 +17,129 @@
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
+#include <fstream>
 
-// Stuff for WinPcap. The defines are super important for linking.
+// Stuff for WinPcap. Everything before the pcap.h include is super important for error-free linking.
+typedef unsigned int u_int;
+typedef unsigned char u_char;
+typedef unsigned short u_short;
 #define WPCAP
 #define HAVE_REMOTE
-#include "pcap.h"
+#include <Winsock2.h>
+#include <pcap.h>
 
 // Winsock includes.
-#include <Winsock2.h>
 #include <windows.h>
 #include <conio.h>
 
-// Constants
+// Utilities.
+#include <unordered_set>
+#include "fwreconstruct.h"
+
+// Constants.
 #define CAPTURE_BYTES 65536 // Number of bytes to capture, per packet. Set absurdly high to capture full packet.
 
 using namespace std;
 
 // Ethernet header
 typedef struct eth_header{
-	u_char dest[6];
-	u_char source[6];
-    u_short type;
+	unsigned char dest[6];
+	unsigned char source[6];
+    unsigned short type;
 }   eth_header , *PETHER_HDR , FAR * LPETHER_HDR , ETHERHeader;
 
 // IP address
 typedef struct ip_address{
-    u_char byte1;
-    u_char byte2;
-    u_char byte3;
-    u_char byte4;
+    unsigned char byte1;
+    unsigned char byte2;
+    unsigned char byte3;
+    unsigned char byte4;
+    int toInt() {return (byte1<<12)+(byte2<<8)+(byte3<<4)+byte4;}
 }ip_address;
 
 // IP header (v4)
 typedef struct ip_header{
-    u_char  hlen:4;			// header length
-    u_char  ver:4;        	// version
-    u_char  ecn:2;  		// explicit congestion notification (RFC 3168)
-    u_char  dhcp:6;         // differentiated services code point (RFC 2474)
-    u_short tlen;           // total length
-    u_short id; 			// identification
-    u_char fragoffset:5;   	// fragmentation offset
-    u_char mfrag:1;         // more fragments
-    u_char dfrag:1;   		// don't fragment
-    u_char zero:1;   		// reserved flag
-    u_char fragoffset1;		// fragment offset again
-    u_char  ttl;            // time to live
-    u_char  proto;          // protocol
-    u_short crc;            // header checksum
+    unsigned char  hlen:4;			// header length
+    unsigned char  ver:4;        	// version
+    unsigned char  ecn:2;  		// explicit congestion notification (RFC 3168)
+    unsigned char  dhcp:6;         // differentiated services code point (RFC 2474)
+    unsigned short tlen;           // total length
+    unsigned short id; 			// identification
+    unsigned char fragoffset:5;   	// fragmentation offset
+    unsigned char mfrag:1;         // more fragments
+    unsigned char dfrag:1;   		// don't fragment
+    unsigned char zero:1;   		// reserved flag
+    unsigned char fragoffset1;		// fragment offset again
+    unsigned char  ttl;            // time to live
+    unsigned char  proto;          // protocol
+    unsigned short crc;            // header checksum
     ip_address  src;      	// source address
     ip_address  dest;      	// destination address
 }ip_header;
 
 // UDP header
 typedef struct udp_header{
-    u_short sport;          // Source port
-    u_short dport;          // Destination port
-    u_short len;            // Datagram length
-    u_short crc;            // Checksum
+    unsigned short sport;          // Source port
+    unsigned short dport;          // Destination port
+    unsigned short len;            // Datagram length
+    unsigned short crc;            // Checksum
 }udp_header;
 
 // TCP header
 typedef struct tcp_header{
-	u_short sport; 			// source port
-	u_short dport; 			// destination port
-    u_int sequence; 		// sequence number
-    u_int acknowledge; 		// acknowledgement number
-    u_char ns :1; 			// nonce sum
-    u_char reserved_part1:3;// according to rfc
-    u_char data_offset:4; 	// # of 32-bit words in header
-    u_char fin :1; 			// Finish Flag
-    u_char syn :1; 			// Synchronize Flag
-    u_char rst :1; 			// Reset Flag
-    u_char psh :1; 			// Push Flag
-    u_char ack :1; 			// Acknowledgement Flag
-    u_char urg :1; 			// Urgent Flag
-    u_char ecn :1; 			// ECN-Echo Flag
-    u_char cwr :1; 			// Congestion Window Reduced Flag
-    u_short window; 		// window
-    u_short checksum; 		// checksum
-    u_short urgent_pointer; // urgent pointer
+	unsigned short sport; 			// source port
+	unsigned short dport; 			// destination port
+    unsigned int sequence; 		// sequence number
+    unsigned int acknowledge; 		// acknowledgement number
+    unsigned char ns :1; 			// nonce sum
+    unsigned char reserved_part1:3;// according to rfc
+    unsigned char data_offset:4; 	// # of 32-bit words in header
+    unsigned char fin :1; 			// Finish Flag
+    unsigned char syn :1; 			// Synchronize Flag
+    unsigned char rst :1; 			// Reset Flag
+    unsigned char psh :1; 			// Push Flag
+    unsigned char ack :1; 			// Acknowledgement Flag
+    unsigned char urg :1; 			// Urgent Flag
+    unsigned char ecn :1; 			// ECN-Echo Flag
+    unsigned char cwr :1; 			// Congestion Window Reduced Flag
+    unsigned short window; 		// window
+    unsigned short checksum; 		// checksum
+    unsigned short urgent_pointer; // urgent pointer
 } tcp_header;
 
 // ICMP header
 typedef struct icmp_hdr
 {
-	u_char type; // ICMP Error type
-	u_char code; // Type sub code
-	u_short checksum;
-	u_short id;
-	u_short seq;
+	unsigned char type; // ICMP Error type
+	unsigned char code; // Type sub code
+	unsigned short checksum;
+	unsigned short id;
+	unsigned short seq;
 } icmp_hdr;
 
 // Packet handler forward dec.
 // To be registered as a callback function for WinPcap - called whenever a packet is captured.
-void decode_packet(u_char *param, const struct pcap_pkthdr *header, const u_char *pkt_data);
+void decode_packet(unsigned char *param, const struct pcap_pkthdr *header, const unsigned char *pkt_data);
+
+// The things I do to get the hashtable to recognize user-defined classes
+namespace std{
+	template <> struct hash<HtmlSession*> {
+		size_t operator()(HtmlSession* const &x) const { // Make hash value based on src and dest ip and port.
+			return std::hash<string>()(x->getHashString());
+		}
+	};
+}
+unordered_set<HtmlSession*> session_table;
+
+FILE *fp;
+
 
 int main() {
     pcap_if_t *alldevs;	// list of all capture devices.
     char errbuf[PCAP_ERRBUF_SIZE]; // cstring used by winpcap for error messages.
 
     // Grab device list. Freak out if error occurs. This function doesn't like to be run from IDEs - run exe directly!
-    if (pcap_findalldevs_ex(PCAP_SRC_IF_STRING, NULL, &alldevs, errbuf) == -1)
+    if (pcap_findalldevs_ex(PCAP_SRC_IF_STRING, NULL, &alldevs, (char*)errbuf) == -1)
     	{ fprintf(stderr,"Error in pcap_findalldevs_ex: %s\n", errbuf); exit(1); }
 
     // Print info for all found devices.
@@ -159,6 +181,11 @@ int main() {
     }
     cout<<endl<<"Now listening on "<<d->description<<"..."<<endl;
 
+    // Open an output file for cleaner console output.
+    fp=fopen("output.txt", "w");
+    if(fp==NULL) { cout<<"Error opening output file."<<endl; exit(1);}
+    cout<<"Output will be saved to 'output.txt'."<<endl;
+
     // Free device list now that we're done with it.
     pcap_freealldevs(alldevs);
 
@@ -169,22 +196,83 @@ int main() {
 }
 
 void print_eth_hdr(eth_header *eth){
-	cout<<"\tEthernet Header :"<<endl;
-	printf("\t |Dest : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->dest[0], eth->dest[1], eth->dest[2], eth->dest[3], eth->dest[4], eth->dest[5]);
-	printf("\t |Src  : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->source[0], eth->source[1], eth->source[2], eth->source[3], eth->source[4], eth->source[5]);
-	cout<<"\t |Proto: "<<eth->type<<endl;
+	fprintf(fp,"\tEthernet Header :\n");
+	fprintf(fp, "\t |Dest : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->dest[0], eth->dest[1], eth->dest[2], eth->dest[3], eth->dest[4], eth->dest[5]);
+	fprintf(fp, "\t |Src  : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->source[0], eth->source[1], eth->source[2], eth->source[3], eth->source[4], eth->source[5]);
+	fprintf(fp, "\t |Proto: %d\n", eth->type);
 }
 void print_ip_hdr(ip_header *ip){
-	cout<<"\tIP Header :"<<endl;
-	printf("\t |Version : %d |HLEN : %d |DCSP : %d |ECN : %d |Total Length : %d\n", (u_int)ip->ver, (u_int)ip->hlen, (u_int)ip->dhcp, (u_int)ip->ecn, (u_int)ip->tlen);
-	printf("\t |Identification : %d |Flags : %d%d%d | Fragmentation Offset: %d\n", ip->id, (u_int)ip->zero, (u_int)ip->dfrag, (u_int)ip->mfrag, (u_int)ip->fragoffset);
-	printf("\t |Time to Live : %d |Protocol : %d |Header Checksum : %d\n", (u_int)ip->ttl, (u_int)ip->proto, ip->crc);
-	printf("\t |Source : %d.%d.%d.%d\n", ip->src.byte1, ip->src.byte2, ip->src.byte3, ip->src.byte4);
-	printf("\t |Destination : %d.%d.%d.%d\n", ip->dest.byte1, ip->dest.byte2, ip->dest.byte3, ip->dest.byte4);
+	fprintf(fp,"\tIP Header :\n");
+	fprintf(fp,"\t |Version : %d |HLEN : %d |DCSP : %d |ECN : %d |Total Length : %d\n", (unsigned int)ip->ver, (unsigned int)ip->hlen, (unsigned int)ip->dhcp, (unsigned int)ip->ecn, (unsigned int)ip->tlen);
+	fprintf(fp,"\t |Identification : %d |Flags : %d%d%d | Fragmentation Offset: %d\n", ip->id, (unsigned int)ip->zero, (unsigned int)ip->dfrag, (unsigned int)ip->mfrag, (unsigned int)ip->fragoffset);
+	fprintf(fp,"\t |Time to Live : %d |Protocol : %d |Header Checksum : %d\n", (unsigned int)ip->ttl, (unsigned int)ip->proto, ip->crc);
+	fprintf(fp,"\t |Source : %d.%d.%d.%d\n", ip->src.byte1, ip->src.byte2, ip->src.byte3, ip->src.byte4);
+	fprintf(fp,"\t |Destination : %d.%d.%d.%d\n", ip->dest.byte1, ip->dest.byte2, ip->dest.byte3, ip->dest.byte4);
 }
 
+void ICMPhelper(const unsigned char *data, int len){
+
+}
+
+void TCPhelper(const unsigned char *data, int len){
+	// Grab TCP header
+	tcp_header* tcp = (tcp_header*)(data+sizeof(eth_header)+sizeof(ip_header));
+
+	// Print header here
+
+	// Check for HTTP connections
+	unsigned short dport = ntohs(tcp->dport), sport = ntohs(tcp->sport);
+	cout<<dport<<", "<<sport<<endl;
+	if(dport == 80 || sport == 80 || dport == 443 || sport == 443) {
+		cout<<"\tHTML detected."<<endl;
+		ip_header* ip = (ip_header*)(data+sizeof(eth_header));
+
+		// TODO: make a better way for this switch. Maybe '|' them together.
+		HtmlSession* session = new HtmlSession(ip->src.toInt(), sport, ip->dest.toInt(), dport);
+		// Case of syn
+		if(tcp->syn!=0 && tcp->ack==0) {
+			cout<<"\tSession Created.\n";
+			session_table.insert(session);
+		}
+		// Case of syn, ack
+		else if(tcp->syn!=0 && tcp->ack!=0) {
+
+		}
+		// Case of body message (no rst, syn, fin, ack)
+		else if(tcp->syn==0 && tcp->ack==0 && tcp->fin==0 && tcp->rst==0) {
+			unordered_set<HtmlSession*>::iterator i;
+			i = session_table.find(session);
+			if(i != session_table.end()) {
+				delete session;
+				session = (HtmlSession*)*i;
+				cout<<"Adding packet to session.\n";
+				int offset = sizeof(eth_header)+sizeof(ip)+sizeof(tcp);
+				int seq = ntohs(tcp->sequence);
+				int datalen = len-offset;
+				session->addPacket(new HtmlConstruct(data+offset, datalen, seq, seq+datalen));
+			}
+		}
+		// Case of closure (rst, fin)
+		else if(tcp->rst!=0 || tcp->fin !=0) {
+			unordered_set<HtmlSession*>::iterator i;
+			i = session_table.find(session);
+			if(i != session_table.end()) {
+				delete session;
+				session = (HtmlSession*)*i;
+				session->dumpData();
+			}
+		}
+	}
+}
+
+void UDPhelper(const unsigned char *data, int len){
+
+}
+
+
+
 // Packet decoder - takes a packet and figures out protocol. Passes along to appropriate helper.
-void decode_packet(u_char *param, const struct pcap_pkthdr *header, const u_char *pkt_data) {
+void decode_packet(unsigned char *param, const struct pcap_pkthdr *header, const unsigned char *pkt_data) {
 
 	// Make timestamp readable.
 	time_t local = header->ts.tv_sec;
@@ -193,7 +281,7 @@ void decode_packet(u_char *param, const struct pcap_pkthdr *header, const u_char
 	strftime(timestamp, sizeof timestamp, "%H:%M:%S", time);
 
 	// Print capture time and length of packet.
-	cout<<"Packet Captured : "<<timestamp<<" (Length : "<<header->len<<" bytes)"<<endl;
+	fprintf(fp,"Packet Captured : %s (Length: %d bytes)\n",timestamp, header->len);
 
 	// Get ethernet header
 	eth_header *eth = (eth_header *)pkt_data;
@@ -204,27 +292,28 @@ void decode_packet(u_char *param, const struct pcap_pkthdr *header, const u_char
 	// Figure out the protocol of the packet
 	switch(ip->proto) {
 		case 1: // ICMP
-			cout<<endl<<"ICMP PACKET : "<<endl;
+			fprintf(fp, "ICMP PACKET :\n");
 			print_eth_hdr(eth);
 			print_ip_hdr(ip);
 			break;
 		case 2: // IGMP
-			cout<<endl<<"IGMP PACKET : "<<endl;
+			fprintf(fp, "IGMP PACKET :\n");
 			print_eth_hdr(eth);
 			print_ip_hdr(ip);
 			break;
 		case 6: // TCP
-			cout<<endl<<"TCP PACKET : "<<endl;
+			fprintf(fp, "TCP PACKET :\n");
 			print_eth_hdr(eth);
 			print_ip_hdr(ip);
+			TCPhelper(pkt_data, header->len);
 			break;
 		case 17:// UDP
-			cout<<endl<<"UDP PACKET : "<<endl;
+			fprintf(fp, "UDP PACKET :\n");
 			print_eth_hdr(eth);
 			print_ip_hdr(ip);
 			break;
 		default:
-			cout<<ip->proto<<endl;
+			fprintf(fp,"%d\n",ip->proto);
 			break;
 	}
 }

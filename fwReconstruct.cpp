@@ -11,35 +11,35 @@ using namespace std;
  * 		Represents a packet of contiguous html data.
  ***************************************************/
 // constructor
-HtmlConstruct::HtmlConstruct(unsigned char* data, int len, int seq, int nextseq){
-	this->data=new unsigned char[len];
-	for(int i=0; i<len; i++) this->data[i]=data[i]; // allocates memory in case a const char was passed in
-	this->len=len; this->seq=seq; this->nextseq=nextseq;
+HtmlConstruct::HtmlConstruct(const unsigned char* data, int len, int seq, int nextseq){
+this->data=new unsigned char[len];
+for(int i=0; i<len; i++) this->data[i]=data[i]; // copys over data in unsigned char
+this->len=len; this->seq=seq; this->nextseq=nextseq;
 }
 
 // Appends data in c to this object
 int HtmlConstruct::combine(HtmlConstruct* c){
-	if(c->getSeq()!=nextseq) return 0; //Exit if not a valid combine. Redundant, but safe.
+if(c->getSeq()!=nextseq) return 0; //Exit if not a valid combine. Redundant, but safe.
 
-	// Grab necessary vars from c.
-	unsigned char *data2 = c->getData();
-	int len2 = c->getLen();
+// Grab necessary vars from c.
+unsigned char *data2 = c->getData();
+int len2 = c->getLen();
 
-	// Allocate a new data set from the two data fields. Discard old data.
-	unsigned char *newdata = new unsigned char[len+len2];
-	int i;
-	for(i=0; i<len; i++) newdata[i]=data[i]; // this's (this'? this?) data
-	for(i=0; i<len2; i++) newdata[i+len]=data2[i]; // c's data
-	delete data;
+// Allocate a new data set from the two data fields. Discard old data.
+unsigned char *newdata = new unsigned char[len+len2];
+int i;
+for(i=0; i<len; i++) newdata[i]=data[i]; // this's (this'? this?) data
+for(i=0; i<len2; i++) newdata[i+len]=data2[i]; // c's data
+delete data;
 
-	// Update members.
-	data = newdata;
-	len += len2;
-	nextseq = c->getNext();
+// Update members.
+data = newdata;
+len += len2;
+nextseq = c->getNext();
 
-	// Return 1 if successful.
-	// DON'T FORGET TO DELETE C OR MEMORY WILL LEAK!!!
-	return 1;
+// Return 1 if successful.
+// DON'T FORGET TO DELETE C OR MEMORY WILL LEAK!!!
+return 1;
 }
 
 // Accessors. Yay.
@@ -54,7 +54,7 @@ int HtmlConstruct::getNext(){return nextseq;}
  * 		from provided HtmlConstructs.
  ***************************************************/
 // Constructor
-HtmlSession::HtmlSession(int srcip, int srcprt, int dstip, int dstprt){
+HtmlSession::HtmlSession(int srcip, short srcprt, int dstip, short dstprt){
 	this->srcip=srcip; this->srcprt=srcprt; this->dstip=dstip; this->dstprt=dstprt;
 	packets = new list<HtmlConstruct*>();
 }
@@ -88,6 +88,15 @@ void HtmlSession::addPacket(HtmlConstruct* c){
 	}
 	//cout<<"added to end"<<endl;
 	packets->push_back(c);
+}
+
+string HtmlSession::getHashString(){
+	stringstream ss;
+	ss.fill('0'); ss.width(sizeof(int));
+	ss<<srcip<<dstip;
+	ss.width(sizeof(short));
+	ss<<srcprt<<dstprt;
+	return ss.str();
 }
 
 // Dumps all data from packets in member list.
