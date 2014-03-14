@@ -7,6 +7,8 @@
 #include <sstream>
 #include <list>
 
+#include "TcpConnection.h"
+
 class HtmlConstruct{
 
 private:
@@ -24,19 +26,14 @@ public:
 	int getNext();
 };
 
-class HtmlSession{
+class HtmlSession : TcpSession {
 private:
-	int srcip, dstip;
-	short srcprt, dstprt;
 	std::list<HtmlConstruct*>* packets;
 protected:
 public:
-	HtmlSession(int srcip, short srcprt, int dstip, short dstprt);
+	HtmlSession(unsigned short srcprt, unsigned short dstprt);
 	void addPacket(HtmlConstruct* c);
-	std::string getHashString();
-	std::string dumpData();/*
-	bool operator==(HtmlSession x){return (	this->srcip==x.srcip && this->srcprt==x.srcprt &&
-											this->dstip==x.dstip && this->dstprt==x.dstprt		); }*/
+	std::string dumpData();
 };
 
 #endif /* FWRECONSTRUCT_H_ */

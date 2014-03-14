@@ -34,7 +34,9 @@ typedef unsigned short u_short;
 
 // Utilities.
 #include <unordered_set>
+#include <unordered_map>
 #include "fwreconstruct.h"
+#include "TcpConnection.h"
 
 // Constants.
 #define CAPTURE_BYTES 65536 // Number of bytes to capture, per packet. Set absurdly high to capture full packet.
@@ -121,15 +123,9 @@ typedef struct icmp_hdr
 // To be registered as a callback function for WinPcap - called whenever a packet is captured.
 void decode_packet(unsigned char *param, const struct pcap_pkthdr *header, const unsigned char *pkt_data);
 
-// The things I do to get the hashtable to recognize user-defined classes
-namespace std{
-	template <> struct hash<HtmlSession*> {
-		size_t operator()(HtmlSession* const &x) const { // Make hash value based on src and dest ip and port.
-			return std::hash<string>()(x->getHashString());
-		}
-	};
-}
-unordered_set<HtmlSession*> session_table;
+typedef unordered_map<double, TcpConnection*> connMap;
+connMap connections;
+typedef pair<double, TcpConnection*> connPair;
 
 FILE *fp;
 
@@ -216,52 +212,74 @@ void ICMPhelper(const unsigned char *data, int len){
 
 void TCPhelper(const unsigned char *data, int len){
 	// Grab TCP header
-	tcp_header* tcp = (tcp_header*)(data+sizeof(eth_header)+sizeof(ip_header));
+	ip_header* ip = (ip_header*)(data+sizeof(eth_header));
+	tcp_header* tcp = (tcp_header*)(data+sizeof(eth_header)+sizeof(ip));
 
 	// Print header here
 
-	// Check for HTTP connections
+	// Generate necessary values
 	unsigned short dport = ntohs(tcp->dport), sport = ntohs(tcp->sport);
-	cout<<dport<<", "<<sport<<endl;
-	if(dport == 80 || sport == 80 || dport == 443 || sport == 443) {
-		cout<<"\tHTML detected."<<endl;
-		ip_header* ip = (ip_header*)(data+sizeof(eth_header));
+	unsigned int dstip=ip->dest.toInt(), srcip=ip->src.toInt();
+	fprintf(stdout,"S: %d.%d.%d.%d, D:%d.%d.%d.%d\n ", ip->dest.byte1, ip->dest.byte2, ip->dest.byte3, ip->dest.byte4, ip->src.byte1, ip->src.byte2, ip->src.byte3, ip->src.byte4);
+	double key1 = (((int)srcip)*2) + (int)dstip;
+	double key2 = (((int)dstip)*2) + (int)srcip;
+	cout<<"\tip1="<<srcip<<", ip2="<<dstip<<", key1="<<key1<<", key2="<<key2<<endl;
 
-		// TODO: make a better way for this switch. Maybe '|' them together.
-		HtmlSession* session = new HtmlSession(ip->src.toInt(), sport, ip->dest.toInt(), dport);
-		// Case of syn
-		if(tcp->syn!=0 && tcp->ack==0) {
-			cout<<"\tSession Created.\n";
-			session_table.insert(session);
+	// Get connection between hosts, if it exists. Otherwise, make and register a new one
+	TcpConnection* c;
+	connPair p;
+	connMap::iterator i;
+	i=connections.find(key1);
+	if(i!=connections.end()) {p=(connPair)*i; c=p.second;} // Check for connection as-is
+	else {
+		i=connections.find(key2);
+		if(i!=connections.end()) { // Check for the reverse connection. Reverse source and dest values if found
+			p=(connPair)*i;
+			c=p.second;
+			int temp=srcip; srcip=dstip; dstip=temp;
+			short tempprt=sport; sport=dport; dport=tempprt;
+		} else { // If not found, insert new connection as-is
+			c = new TcpConnection(srcip, dstip);
+			connections.insert({key1, c});
+			cout<<"New connection registered\n";
 		}
-		// Case of syn, ack
-		else if(tcp->syn!=0 && tcp->ack!=0) {
+	}
 
-		}
-		// Case of body message (no rst, syn, fin, ack)
-		else if(tcp->syn==0 && tcp->ack==0 && tcp->fin==0 && tcp->rst==0) {
-			unordered_set<HtmlSession*>::iterator i;
-			i = session_table.find(session);
-			if(i != session_table.end()) {
-				delete session;
-				session = (HtmlSession*)*i;
-				cout<<"Adding packet to session.\n";
-				int offset = sizeof(eth_header)+sizeof(ip)+sizeof(tcp);
-				int seq = ntohs(tcp->sequence);
-				int datalen = len-offset;
-				session->addPacket(new HtmlConstruct(data+offset, datalen, seq, seq+datalen));
-			}
-		}
-		// Case of closure (rst, fin)
-		else if(tcp->rst!=0 || tcp->fin !=0) {
-			unordered_set<HtmlSession*>::iterator i;
-			i = session_table.find(session);
-			if(i != session_table.end()) {
-				delete session;
-				session = (HtmlSession*)*i;
-				session->dumpData();
-			}
-		}
+	// What to do in cases of various flag sets
+	//HtmlSession* session = new HtmlSession(ip->src.toInt(), sport, ip->dest.toInt(), dport);
+	// Case of syn
+	if(tcp->syn!=0 && tcp->ack==0) {
+		/*
+		cout<<"\tSession Created.\n";
+		session_table.insert(session);*/
+	}
+	// Case of syn, ack
+	else if(tcp->syn!=0 && tcp->ack!=0) {
+
+	}
+	// Case of body message (no rst, syn, fin, ack)
+	else if(tcp->syn==0 && tcp->ack==0 && tcp->fin==0 && tcp->rst==0) {/*
+		unordered_set<HtmlSession*>::iterator i;
+		i = session_table.find(session);
+		if(i != session_table.end()) {
+			delete session;
+			session = (HtmlSession*)*i;
+			cout<<"Adding packet to session.\n";
+			int offset = sizeof(eth_header)+sizeof(ip)+sizeof(tcp);
+			int seq = ntohs(tcp->sequence);
+			int datalen = len-offset;
+			session->addPacket(new HtmlConstruct(data+offset, datalen, seq, seq+datalen));
+		} */
+	}
+	// Case of closure (rst, fin)
+	else if(tcp->rst!=0 || tcp->fin !=0) {/*
+		unordered_set<HtmlSession*>::iterator i;
+		i = session_table.find(session);
+		if(i != session_table.end()) {
+			delete session;
+			session = (HtmlSession*)*i;
+			session->dumpData();
+		}*/
 	}
 }
 

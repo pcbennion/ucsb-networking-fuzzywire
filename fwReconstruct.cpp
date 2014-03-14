@@ -13,7 +13,7 @@ using namespace std;
 // constructor
 HtmlConstruct::HtmlConstruct(const unsigned char* data, int len, int seq, int nextseq){
 this->data=new unsigned char[len];
-for(int i=0; i<len; i++) this->data[i]=data[i]; // copys over data in unsigned char
+for(int i=0; i<len; i++) this->data[i]=data[i]; // copys over data from const location
 this->len=len; this->seq=seq; this->nextseq=nextseq;
 }
 
@@ -54,8 +54,8 @@ int HtmlConstruct::getNext(){return nextseq;}
  * 		from provided HtmlConstructs.
  ***************************************************/
 // Constructor
-HtmlSession::HtmlSession(int srcip, short srcprt, int dstip, short dstprt){
-	this->srcip=srcip; this->srcprt=srcprt; this->dstip=dstip; this->dstprt=dstprt;
+HtmlSession::HtmlSession(unsigned short srcprt, unsigned short dstprt)
+	: TcpSession(srcprt, dstprt, HTML){
 	packets = new list<HtmlConstruct*>();
 }
 
@@ -88,15 +88,6 @@ void HtmlSession::addPacket(HtmlConstruct* c){
 	}
 	//cout<<"added to end"<<endl;
 	packets->push_back(c);
-}
-
-string HtmlSession::getHashString(){
-	stringstream ss;
-	ss.fill('0'); ss.width(sizeof(int));
-	ss<<srcip<<dstip;
-	ss.width(sizeof(short));
-	ss<<srcprt<<dstprt;
-	return ss.str();
 }
 
 // Dumps all data from packets in member list.

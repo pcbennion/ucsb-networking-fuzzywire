@@ -4,7 +4,7 @@ LFLAGS 	=	-lwpcap -lwsock32
 
 TARGET 	=	FuzzyWire.exe
 
-SRC 	=	FuzzyWire.cpp fwReconstruct.cpp
+SRC 	=	FuzzyWire.cpp fwReconstruct.cpp TcpConnection.cpp
 OBJS 	=	$(SRC:.cpp=.o)
 
 $(OBJS) : $(SRC)
