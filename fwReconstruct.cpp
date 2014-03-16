@@ -99,10 +99,9 @@ string HtmlSession::dumpData(){
 	HtmlConstruct* elem;
 	for(i=packets->begin(); i!=packets->end(); ++i){
 		elem = *i;
-		cout << elem->getData();
-		cout<<"|";
+		ss << elem->getData();
+		ss <<"|";
 	}
-	cout<<endl;
 	return ss.str();
 }
 

@@ -1,10 +1,9 @@
 #ifndef TCPCONNECTION_H_
 #define TCPCONNECTION_H_
 
-
 #include <cstdlib>
 #include <unordered_map>
-//#include "fwReconstruct.h"
+#include "PacketHeaders.h"
 
 class TcpSession; class HtmlSession;
 
@@ -24,7 +23,7 @@ public:
 
 class TcpConnection {
 private:
-	sessionMap map;
+	sessionMap* map;
 	unsigned int srcip, dstip;
 	int synCount;
 	double key;
@@ -34,7 +33,7 @@ public:
 	TcpSession* findConnection(int key);
 	double getKeyVal() {return key;}
 	void addSyn(unsigned short prt1, unsigned short prt2);
-	void addData(unsigned short prt1, unsigned short prt2, const char* data);
+	void addData(tcp_header* header, const unsigned char* data, int len);
 	void addFin(unsigned short prt1, unsigned short prt2);
 };
 

@@ -1,23 +1,26 @@
 /*==========================================================================
  *
- * FUZZY WIRE - Network packet capture and analysis
+ * FUZZY WIRE - Network packet capture, HTML reconstruction, security analysis
  *
  * Authors: Peter Bennion
  * 			Tyralyn Tran
  *
- * Version: v0.01
+ * Version: v0.5
  *
  * Instructions for installing WinPcap + libs: http://www.codeproject.com/Articles/30234/Introduction-to-the-WinPcap-Networking-Libraries
  *		Don't forget to add pcap library to PATH!
  *
- * Code based on example sniffer at: https://www.winpcap.org/docs/docs_40_2/html/group__wpcap__tut3.html
+ * Code based on example sniffers at:	https://www.winpcap.org/docs/docs_40_2/html/group__wpcap__tut3.html
+ *										http://www.binarytides.com/code-packet-sniffer-c-winpcap/
  *
  *==========================================================================*/
 
+// Std Utilities.
 #include <cstdlib>
 #include <cstdio>
 #include <iostream>
 #include <fstream>
+#include <unordered_map>
 
 // Stuff for WinPcap. Everything before the pcap.h include is super important for error-free linking.
 typedef unsigned int u_int;
@@ -32,103 +35,27 @@ typedef unsigned short u_short;
 #include <windows.h>
 #include <conio.h>
 
-// Utilities.
-#include <unordered_set>
-#include <unordered_map>
-#include "fwreconstruct.h"
+// Other headers in fuzzywire.
 #include "TcpConnection.h"
+
+// Globals.
+typedef std::unordered_map<double, TcpConnection*> connMap;
+typedef std::pair<double, TcpConnection*> connPair;
+connMap* connections;
+FILE *fp;
+eth_header *ethhdr;			// These are for ease of use.
+ip_header *iphdr;
+tcp_header *tcpheader;
+udp_header *udpheader;
+icmp_header *icmpheader;
 
 // Constants.
 #define CAPTURE_BYTES 65536 // Number of bytes to capture, per packet. Set absurdly high to capture full packet.
 
+// Forward declarations.
+void ProcessPacket(u_char* Buffer, int Size);
+
 using namespace std;
-
-// Ethernet header
-typedef struct eth_header{
-	unsigned char dest[6];
-	unsigned char source[6];
-    unsigned short type;
-}   eth_header , *PETHER_HDR , FAR * LPETHER_HDR , ETHERHeader;
-
-// IP address
-typedef struct ip_address{
-    unsigned char byte1;
-    unsigned char byte2;
-    unsigned char byte3;
-    unsigned char byte4;
-    int toInt() {return (byte1<<12)+(byte2<<8)+(byte3<<4)+byte4;}
-}ip_address;
-
-// IP header (v4)
-typedef struct ip_header{
-    unsigned char  hlen:4;			// header length
-    unsigned char  ver:4;        	// version
-    unsigned char  ecn:2;  		// explicit congestion notification (RFC 3168)
-    unsigned char  dhcp:6;         // differentiated services code point (RFC 2474)
-    unsigned short tlen;           // total length
-    unsigned short id; 			// identification
-    unsigned char fragoffset:5;   	// fragmentation offset
-    unsigned char mfrag:1;         // more fragments
-    unsigned char dfrag:1;   		// don't fragment
-    unsigned char zero:1;   		// reserved flag
-    unsigned char fragoffset1;		// fragment offset again
-    unsigned char  ttl;            // time to live
-    unsigned char  proto;          // protocol
-    unsigned short crc;            // header checksum
-    ip_address  src;      	// source address
-    ip_address  dest;      	// destination address
-}ip_header;
-
-// UDP header
-typedef struct udp_header{
-    unsigned short sport;          // Source port
-    unsigned short dport;          // Destination port
-    unsigned short len;            // Datagram length
-    unsigned short crc;            // Checksum
-}udp_header;
-
-// TCP header
-typedef struct tcp_header{
-	unsigned short sport; 			// source port
-	unsigned short dport; 			// destination port
-    unsigned int sequence; 		// sequence number
-    unsigned int acknowledge; 		// acknowledgement number
-    unsigned char ns :1; 			// nonce sum
-    unsigned char reserved_part1:3;// according to rfc
-    unsigned char data_offset:4; 	// # of 32-bit words in header
-    unsigned char fin :1; 			// Finish Flag
-    unsigned char syn :1; 			// Synchronize Flag
-    unsigned char rst :1; 			// Reset Flag
-    unsigned char psh :1; 			// Push Flag
-    unsigned char ack :1; 			// Acknowledgement Flag
-    unsigned char urg :1; 			// Urgent Flag
-    unsigned char ecn :1; 			// ECN-Echo Flag
-    unsigned char cwr :1; 			// Congestion Window Reduced Flag
-    unsigned short window; 		// window
-    unsigned short checksum; 		// checksum
-    unsigned short urgent_pointer; // urgent pointer
-} tcp_header;
-
-// ICMP header
-typedef struct icmp_hdr
-{
-	unsigned char type; // ICMP Error type
-	unsigned char code; // Type sub code
-	unsigned short checksum;
-	unsigned short id;
-	unsigned short seq;
-} icmp_hdr;
-
-// Packet handler forward dec.
-// To be registered as a callback function for WinPcap - called whenever a packet is captured.
-void decode_packet(unsigned char *param, const struct pcap_pkthdr *header, const unsigned char *pkt_data);
-
-typedef unordered_map<double, TcpConnection*> connMap;
-connMap connections;
-typedef pair<double, TcpConnection*> connPair;
-
-FILE *fp;
-
 
 int main() {
     pcap_if_t *alldevs;	// list of all capture devices.
@@ -185,153 +112,146 @@ int main() {
     // Free device list now that we're done with it.
     pcap_freealldevs(alldevs);
 
-    // Register callback and start capture loop.
-    pcap_loop(capture, 0, decode_packet, NULL);
+    connections = new connMap();
 
-    return 0;
+    // Read packets in a loop
+    unsigned int res;
+    struct pcap_pkthdr* header;
+    unsigned char* data;
+	while((res = pcap_next_ex( capture, &header, (const unsigned char**)&data)) >= 0)
+	{
+		if(res == 0){continue;} // No packet this run through
+
+		// Make timestamp readable.
+		time_t local = header->ts.tv_sec;
+		struct tm *time = localtime(&local);
+		char timestamp[16];
+		strftime(timestamp, sizeof timestamp, "%H:%M:%S", time);
+
+		// Print basic packet info
+		//fprintf(logfile , "\nNext Packet : %ld:%ld (Packet Length : %ld bytes) " , header->ts.tv_sec, header->ts.tv_usec, header->len);
+		//fprintf(logfile , "\nNext Packet : %s.%ld (Packet Length : %ld bytes) " , buffer , header->ts.tv_usec, header->len);
+		ProcessPacket(data , header->caplen); // call processing function
+	}
+	return 0;
 }
 
+/**********************************************************************
+ *	PRINT HELPER FUNCTIONS
+ *********************************************************************/
 void print_eth_hdr(eth_header *eth){
 	fprintf(fp,"\tEthernet Header :\n");
-	fprintf(fp, "\t |Dest : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->dest[0], eth->dest[1], eth->dest[2], eth->dest[3], eth->dest[4], eth->dest[5]);
-	fprintf(fp, "\t |Src  : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->source[0], eth->source[1], eth->source[2], eth->source[3], eth->source[4], eth->source[5]);
-	fprintf(fp, "\t |Proto: %d\n", eth->type);
+	fprintf(fp, "\t |Dest : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->dst[0], eth->dst[1], eth->dst[2], eth->dst[3], eth->dst[4], eth->dst[5]);
+	fprintf(fp, "\t |Src  : %.2x-%.2x-%.2x-%.2x-%.2x-%.2x\n", eth->src[0], eth->src[1], eth->src[2], eth->src[3], eth->src[4], eth->src[5]);
+	fprintf(fp, "\t |Proto: %d\n", ntohs(eth->type));
 }
 void print_ip_hdr(ip_header *ip){
+	struct sockaddr_in source,dest;
+	source.sin_addr.s_addr = iphdr->srcaddr;
+	dest.sin_addr.s_addr = iphdr->destaddr;
 	fprintf(fp,"\tIP Header :\n");
-	fprintf(fp,"\t |Version : %d |HLEN : %d |DCSP : %d |ECN : %d |Total Length : %d\n", (unsigned int)ip->ver, (unsigned int)ip->hlen, (unsigned int)ip->dhcp, (unsigned int)ip->ecn, (unsigned int)ip->tlen);
-	fprintf(fp,"\t |Identification : %d |Flags : %d%d%d | Fragmentation Offset: %d\n", ip->id, (unsigned int)ip->zero, (unsigned int)ip->dfrag, (unsigned int)ip->mfrag, (unsigned int)ip->fragoffset);
-	fprintf(fp,"\t |Time to Live : %d |Protocol : %d |Header Checksum : %d\n", (unsigned int)ip->ttl, (unsigned int)ip->proto, ip->crc);
-	fprintf(fp,"\t |Source : %d.%d.%d.%d\n", ip->src.byte1, ip->src.byte2, ip->src.byte3, ip->src.byte4);
-	fprintf(fp,"\t |Destination : %d.%d.%d.%d\n", ip->dest.byte1, ip->dest.byte2, ip->dest.byte3, ip->dest.byte4);
+	fprintf(fp,"\t |Version : %d |HLEN : %d |Total Length : %d Bytes\n", (unsigned int)ip->ver, (unsigned int)ip->hlen, ntohs(iphdr->tlen));
+	fprintf(fp,"\t |Time to Live : %d |Protocol : %d |Header Checksum : %d\n", (unsigned int)ip->ttl, (unsigned int)ip->protocol, ntohs(iphdr->checksum));
+	fprintf(fp,"\t |Source : %s\n", inet_ntoa(source.sin_addr));
+	fprintf(fp,"\t |Destination : %s\n",inet_ntoa(dest.sin_addr));
+}
+void print_tcp_hdr(tcp_header *tcp){
+	fprintf(fp,"\tTCP Header :\n");
+	fprintf(fp,"\t |Source Port : %d |Dest Port : %d\n", (tcpheader->sport), (tcpheader->dport));
+	fprintf(fp,"\t |Sequence Number: %d\n", (unsigned int)tcpheader->sequence);
+	fprintf(fp,"\t |Acknowledge Number : %d \n", (unsigned int)tcpheader->acknowledge);
+	fprintf(fp,"\t |Flags(SYN,ACK,FIN,RST): %d%d%d%d\n", (unsigned int)tcpheader->syn, (unsigned int)tcpheader->ack, (unsigned int)tcpheader->fin, (unsigned int)tcpheader->rst);
 }
 
-void ICMPhelper(const unsigned char *data, int len){
-
-}
-
-void TCPhelper(const unsigned char *data, int len){
-	// Grab TCP header
-	ip_header* ip = (ip_header*)(data+sizeof(eth_header));
-	tcp_header* tcp = (tcp_header*)(data+sizeof(eth_header)+sizeof(ip));
-
-	// Print header here
+/**********************************************************************
+ *	REGISTRY FOR TCP CONNECTIONS
+ *********************************************************************/
+void TCPReg(ip_header* ip, tcp_header* tcp, const unsigned char *data, int len){
 
 	// Generate necessary values
-	unsigned short dport = ntohs(tcp->dport), sport = ntohs(tcp->sport);
-	unsigned int dstip=ip->dest.toInt(), srcip=ip->src.toInt();
-	fprintf(stdout,"S: %d.%d.%d.%d, D:%d.%d.%d.%d\n ", ip->dest.byte1, ip->dest.byte2, ip->dest.byte3, ip->dest.byte4, ip->src.byte1, ip->src.byte2, ip->src.byte3, ip->src.byte4);
+	unsigned short dport = (tcp->sport), sport =  (tcp->dport);
+	unsigned int dstip=ip->destaddr, srcip=ip->srcaddr;
 	double key1 = (((int)srcip)*2) + (int)dstip;
 	double key2 = (((int)dstip)*2) + (int)srcip;
-	cout<<"\tip1="<<srcip<<", ip2="<<dstip<<", key1="<<key1<<", key2="<<key2<<endl;
+	//cout<<sport<<", "<<dport<<", "<<len<<endl;
 
 	// Get connection between hosts, if it exists. Otherwise, make and register a new one
 	TcpConnection* c;
 	connPair p;
 	connMap::iterator i;
-	i=connections.find(key1);
-	if(i!=connections.end()) {p=(connPair)*i; c=p.second;} // Check for connection as-is
+	i=connections->find(key1);
+	if(i!=connections->end()) {p=(connPair)*i; c=p.second;} // Check for connection as-is
 	else {
-		i=connections.find(key2);
-		if(i!=connections.end()) { // Check for the reverse connection. Reverse source and dest values if found
+		i=connections->find(key2);
+		if(i!=connections->end()) { // Check for the reverse connection. Reverse source and dest values if found
 			p=(connPair)*i;
 			c=p.second;
 			int temp=srcip; srcip=dstip; dstip=temp;
 			short tempprt=sport; sport=dport; dport=tempprt;
 		} else { // If not found, insert new connection as-is
 			c = new TcpConnection(srcip, dstip);
-			connections.insert({key1, c});
-			cout<<"New connection registered\n";
+			connections->insert({key1, c});
+			//cout<<"New connection registered\n";
 		}
 	}
 
-	// What to do in cases of various flag sets
-	//HtmlSession* session = new HtmlSession(ip->src.toInt(), sport, ip->dest.toInt(), dport);
+	// What to do in cases of common various flag sets
 	// Case of syn
 	if(tcp->syn!=0 && tcp->ack==0) {
-		/*
-		cout<<"\tSession Created.\n";
-		session_table.insert(session);*/
+		c->addSyn(sport, dport);
 	}
 	// Case of syn, ack
 	else if(tcp->syn!=0 && tcp->ack!=0) {
 
 	}
-	// Case of body message (no rst, syn, fin, ack)
-	else if(tcp->syn==0 && tcp->ack==0 && tcp->fin==0 && tcp->rst==0) {/*
-		unordered_set<HtmlSession*>::iterator i;
-		i = session_table.find(session);
-		if(i != session_table.end()) {
-			delete session;
-			session = (HtmlSession*)*i;
-			cout<<"Adding packet to session.\n";
-			int offset = sizeof(eth_header)+sizeof(ip)+sizeof(tcp);
-			int seq = ntohs(tcp->sequence);
-			int datalen = len-offset;
-			session->addPacket(new HtmlConstruct(data+offset, datalen, seq, seq+datalen));
-		} */
+	// Case of body message (no rst, syn, fin, len>0)
+	else if(tcp->syn==0 && tcp->fin==0 && tcp->rst==0 && len>0) {
+		c->addData(tcp, data, len);
 	}
 	// Case of closure (rst, fin)
-	else if(tcp->rst!=0 || tcp->fin !=0) {/*
-		unordered_set<HtmlSession*>::iterator i;
-		i = session_table.find(session);
-		if(i != session_table.end()) {
-			delete session;
-			session = (HtmlSession*)*i;
-			session->dumpData();
-		}*/
+	else if(tcp->rst != 0 || tcp->fin !=0) {
+		c->addFin(sport, dport);
 	}
 }
+/*********************************************************************/
 
-void UDPhelper(const unsigned char *data, int len){
+void ProcessPacket(u_char* Buffer, int Size)
+{
+    // Get and print Ethernet header
+	ethhdr = (eth_header *)Buffer;
+    //print_eth_hdr(ethhdr);
 
-}
+    // Operate on IP packets only
+    if(ntohs(ethhdr->type) == 0x0800)
+    {
+        // Get and print IPv4 header
+    	iphdr = (ip_header *)(Buffer + sizeof(eth_header));
+        unsigned short iphdrlen = iphdr->hlen*4;
+        int nexthdrlen;
+        //print_ip_hdr(iphdr);
 
-
-
-// Packet decoder - takes a packet and figures out protocol. Passes along to appropriate helper.
-void decode_packet(unsigned char *param, const struct pcap_pkthdr *header, const unsigned char *pkt_data) {
-
-	// Make timestamp readable.
-	time_t local = header->ts.tv_sec;
-	struct tm *time = localtime(&local);
-	char timestamp[16];
-	strftime(timestamp, sizeof timestamp, "%H:%M:%S", time);
-
-	// Print capture time and length of packet.
-	fprintf(fp,"Packet Captured : %s (Length: %d bytes)\n",timestamp, header->len);
-
-	// Get ethernet header
-	eth_header *eth = (eth_header *)pkt_data;
-
-	// Get ip header
-	ip_header *ip = (ip_header *) (pkt_data + sizeof(eth_header));
-
-	// Figure out the protocol of the packet
-	switch(ip->proto) {
-		case 1: // ICMP
-			fprintf(fp, "ICMP PACKET :\n");
-			print_eth_hdr(eth);
-			print_ip_hdr(ip);
-			break;
-		case 2: // IGMP
-			fprintf(fp, "IGMP PACKET :\n");
-			print_eth_hdr(eth);
-			print_ip_hdr(ip);
-			break;
-		case 6: // TCP
-			fprintf(fp, "TCP PACKET :\n");
-			print_eth_hdr(eth);
-			print_ip_hdr(ip);
-			TCPhelper(pkt_data, header->len);
-			break;
-		case 17:// UDP
-			fprintf(fp, "UDP PACKET :\n");
-			print_eth_hdr(eth);
-			print_ip_hdr(ip);
-			break;
-		default:
-			fprintf(fp,"%d\n",ip->proto);
-			break;
-	}
+        switch (iphdr->protocol)
+        {
+            case 1: //ICMP
+            	break;
+            case 2: //IGMP
+            	break;
+            case 6: //TCP
+            	tcpheader = (tcp_header*)( Buffer + iphdrlen + sizeof(eth_header) );
+            	tcpheader->sport = ntohs(tcpheader->sport); tcpheader->dport = ntohs(tcpheader->dport);
+            	tcpheader->sequence = (unsigned int)ntohl(tcpheader->sequence);
+            	tcpheader->acknowledge = (unsigned int)ntohl(tcpheader->acknowledge);
+            	nexthdrlen = tcpheader->data_offset*4;
+            	print_eth_hdr(ethhdr);
+            	print_ip_hdr(iphdr);
+            	print_tcp_hdr(tcpheader);
+            	TCPReg(iphdr, tcpheader, (Buffer+sizeof(eth_header)+iphdrlen+nexthdrlen), Size-sizeof(eth_header)-iphdrlen-nexthdrlen);
+            	break;
+            case 17: //UDP
+            	//udpheader = (udp_header*)( Buffer + iphdrlen + sizeof(eth_header) );
+            	break;
+            default:
+            	break;
+        }
+    }
 }
