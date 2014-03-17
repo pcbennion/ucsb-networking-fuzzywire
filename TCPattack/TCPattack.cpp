@@ -32,7 +32,7 @@
 #include <cstdio>
 #include <iostream>
 #include <string.h>
-#include <netinet/in.h>
+//#include <netinet/in.h>
 #include <windows.h>
 #include <iphlpapi.h>
 
@@ -40,81 +40,63 @@
 #define CAPTURE_BYTES 65536 // Number of bytes to capture, per packet. Set absurdly high to capture full packet.
 
 using namespace std;
+typedef struct eth_header
+{
+    unsigned char dst[6];				// Destination address
+    unsigned char src[6];				// Source address
+    unsigned short type;				// Internet type. We're only interested in IP atm
+};
 
-// Ethernet header
-typedef struct eth_header{
-	u_char dest[6];
-	u_char source[6];
-    u_short type;
-}   eth_header , *PETHER_HDR , FAR * LPETHER_HDR , ETHERHeader;
+// IPv4 HEADER
+typedef struct ip_header
+{
+    unsigned char hlen:4; 				// Length of header - used to find end of optional fields
+    unsigned char ver :4; 				// Ipv4 version
+    unsigned char tos; 					// Congestion and differentiated services (RFCs 3168 & 2474)
+    unsigned short tlen; 				// Total length of IP datagram
 
-// IP address
-typedef struct ip_address{
-    u_char byte1;
-    u_char byte2;
-    u_char byte3;
-    u_char byte4;
-}ip_address;
+    unsigned short identifier;			// Unique identifier
+    unsigned char frag :5; 				// Fragment offset
+    unsigned char flag_more_frag :1;	// More fragments flag
+    unsigned char flag_dont_frag :1;	// Don't fragment flag
+    unsigned char flag_reserved :1;		// Always 0
 
-// IP header (v4)
-typedef struct ip_header{
-    u_char  hlen:4;			// header length
-    u_char  ver:4;        	// version
-    u_char  ecn:2;  		// explicit congestion notification (RFC 3168)
-    u_char  dhcp:6;         // differentiated services code point (RFC 2474)
-    u_short tlen;           // total length
-    u_short id; 			// identification
-    u_char fragoffset:5;   	// fragmentation offset
-    u_char mfrag:1;         // more fragments
-    u_char dfrag:1;   		// don't fragment
-    u_char zero:1;   		// reserved flag
-    u_char fragoffset1;		// fragment offset again
-    u_char  ttl;            // time to live
-    u_char  proto;          // protocol
-    u_short crc;            // header checksum
-    ip_address  src;      	// source address
-    ip_address  dest;      	// destination address
-}ip_header;
+    unsigned char frag1; 				// Fragment offset again - correcting struct length
+    unsigned char ttl; 					// Time to live
+    unsigned char protocol; 			// Protocol(TCP,UDP etc)
+    unsigned short checksum; 			// IP checksum
 
-// UDP header
-typedef struct udp_header{
-    u_short sport;          // Source port
-    u_short dport;          // Destination port
-    u_short len;            // Datagram length
-    u_short crc;            // Checksum
-}udp_header;
+    unsigned int srcaddr; 				// Source address
+    unsigned int destaddr; 				// Source address
+};
 
 // TCP header
-typedef struct tcp_header{
-	u_short sport; 			// source port
-	u_short dport; 			// destination port
-    u_int sequence; 		// sequence number
-    u_int acknowledge; 		// acknowledgement number
-    u_char ns :1; 			// nonce sum
-    u_char reserved_part1:3;// according to rfc
-    u_char data_offset:4; 	// # of 32-bit words in header
-    u_char fin :1; 			// Finish Flag
-    u_char syn :1; 			// Synchronize Flag
-    u_char rst :1; 			// Reset Flag
-    u_char psh :1; 			// Push Flag
-    u_char ack :1; 			// Acknowledgement Flag
-    u_char urg :1; 			// Urgent Flag
-    u_char ecn :1; 			// ECN-Echo Flag
-    u_char cwr :1; 			// Congestion Window Reduced Flag
-    u_short window; 		// window
-    u_short checksum; 		// checksum
-    u_short urgent_pointer; // urgent pointer
-} tcp_header;
-
-// ICMP header
-typedef struct icmp_hdr
+typedef struct tcp_header
 {
-	u_char type; // ICMP Error type
-	u_char code; // Type sub code
-	u_short checksum;
-	u_short id;
-	u_short seq;
-} icmp_hdr;
+    unsigned short sport; 				// Source port
+    unsigned short dport; 				// Destination port
+
+    unsigned int sequence; 				// Sequence number
+
+    unsigned int acknowledge; 			// ACK number
+
+    unsigned char ns :1; 				//Nonce sum flag (RFC 3540)
+    unsigned char reserved:3;			// Reserved (0's)
+    unsigned char data_offset:4; 		// Where the data begins in this fragment
+    unsigned char fin :1; 				// Finish Flag
+    unsigned char syn :1; 				// Synchronize Flag
+    unsigned char rst :1; 				// Reset Flag
+    unsigned char psh :1; 				// Push Flag
+    unsigned char ack :1; 				// Acknowledgment Flag
+    unsigned char urg :1; 				// Urgent Flag
+    unsigned char ecn :1; 				// ECN-echo
+    unsigned char cwr :1; 				// Congestion window reduced
+
+    unsigned short window; 				// Window Size
+
+    unsigned short checksum; 			// Checksum
+    unsigned short urgent; 				// Urgent pointer
+};
 
 // Packet handler forward dec.
 // To be registered as a callback function for WinPcap - called whenever a packet is captured.
@@ -179,47 +161,28 @@ int main(int argc, char* argv[]) {
         fprintf(stderr,"\nUnable to open the adapter. %s is not supported by WinPcap\n", d->name);
         return 0;
     }
-	u_char packet[100];
-	packet[0]=1;
-    packet[1]=1;
-    packet[2]=1;
-    packet[3]=1;
-    packet[4]=1;
-    packet[5]=1;
-    
-    /* set mac source to 2:2:2:2:2:2 */
-    packet[6]=2;
-    packet[7]=2;
-    packet[8]=2;
-    packet[9]=2;
-    packet[10]=2;
-    packet[11]=2;
-	
-	for(i=12;i<100;i++)
-    {
-        packet[i]=i%256;
-    }
 
-	if (pcap_sendpacket(capture, packet, 100 /* size */) != 0)
+	// Free device list now that we're done with it.
+	pcap_freealldevs(alldevs);
+
+	while (pcap_sendpacket(capture, constructPacket(), sizeof(eth_header)+5*4+5*4 /* size */) != 0)
     {
-        //fprintf(stderr,"\nError sending the packet: \n", pcap_geterr(fp));
-		cout<<"shit don't work\n";
-        return 0;
-    }
-	else 
 		cout<<"packet sent! "<< d->name<<endl;
-	//constructPacket();
-	
-    cout<<endl<<"Now listening on "<<d->description<<"..."<<endl;
-
-    // Free device list now that we're done with it.
-    pcap_freealldevs(alldevs);
-
-    // Register callback and start capture loop.
-    pcap_loop(capture, 0, decode_packet, NULL);
-
-    return 0;
+    }
+	fprintf(stderr,"\nError sending the packet: \n");
+	        return 0;
 }
+/*
+void loadiphlpapi() {
+    HINSTANCE hDll = LoadLibrary("iphlpapi.dll");
+
+    GetAdaptersInfo = (pgetadaptersinfo)GetProcAddress(hDll,"GetAdaptersInfo");
+    if(GetAdaptersInfo==NULL)
+        printf("Error in iphlpapi.dll%d",GetLastError());
+    SendArp = (psendarp)GetProcAddress(hDll,"SendARP");
+    if(SendArp==NULL)
+ printf("Error in iphlpapi.dll%d",GetLastError());
+}*/
 
 void GetMacAddress(unsigned char *mac , struct in_addr destip)
 {
@@ -232,7 +195,7 @@ void GetMacAddress(unsigned char *mac , struct in_addr destip)
     srcip = 0;
  
     //Send an arp packet
-    ret = SendARP((IPAddr) destip.S_un.S_addr , srcip , MacAddr , &PhyAddrLen);
+    ret = SendARP((IPAddr) destip.S_un.S_addr , srcip , (PULONG)&MacAddr , &PhyAddrLen);
      
     //Prepare the mac address
     if(PhyAddrLen)
@@ -245,42 +208,76 @@ void GetMacAddress(unsigned char *mac , struct in_addr destip)
     }
 }
 
-/*u_char* constructPacket(u_char ip) {
+void GetGateway(struct in_addr ip , char *sgatewayip , int *gatewayip) {
+    char pAdapterInfo[5000];
+    PIP_ADAPTER_INFO  AdapterInfo;
+    ULONG OutBufLen = sizeof(pAdapterInfo) ;
+
+    GetAdaptersInfo((PIP_ADAPTER_INFO) pAdapterInfo, &OutBufLen);
+    for(AdapterInfo = (PIP_ADAPTER_INFO)pAdapterInfo; AdapterInfo ; AdapterInfo = AdapterInfo->Next) {
+        if(ip.s_addr == inet_addr(AdapterInfo->IpAddressList.IpAddress.String))
+     strcpy(sgatewayip , AdapterInfo->GatewayList.IpAddress.String);
+    }
+    *gatewayip = inet_addr(sgatewayip);
+}
+
+u_char* constructPacket() {
 	u_char* packet;
-	packet = new u_char[65536];
-	in
+	eth_header* ethhdr;
+	ip_header* iphdr;
+	tcp_header* tcphdr;
+
+	struct in_addr srcip, dstip;
+	srcip.s_addr = inet_addr("192.168.0.7"); // hardcoded bleh
+
+	unsigned char* s_mac, d_mac;
+
+	packet = new u_char[sizeof(eth_header)+5*4+5*4];
+	iphdr = (ip_header*)(packet + sizeof(eth_header));
+
+// CONSTRUCT ETHERNET HEADER
+
 	GetMacAddress(s_mac , srcip);
-	printf("Selected device has mac address : %.2X-%.2X-%.2X-%.2X-%.2X-%.2X",s_mac[0],s_mac[1],s_mac[2],s_mac[3],s_mac[4],s_mac[5]);
+	GetGateway(srcip, (char*)d_mac, (int*)(dstip.S_un.S_addr));
+	memcpy(ethhdr->src , s_mac , 6); //Source Mac address
+	memcpy(ethhdr->dst, d_mac, 6); //Destination MAC address
+	ethhdr->type = htons(0x0800); //IP Frames
+
+// TCP HEADER AND IP HEADER
+	iphdr->ver = 4;
+	iphdr->hlen = 5; //In double words thats 4 bytes
+	iphdr->tos = 0;
+	iphdr->tlen = htons (5*4+5*4);
+	iphdr->identifier = htons(2);
+	iphdr->frag = 0;
+	iphdr->flag_reserved=0;
+	iphdr->flag_dont_frag=1;
+	iphdr->flag_more_frag=0;
+	iphdr->frag1 = 0;
+	iphdr->ttl    = 3;
+	iphdr->protocol = IPPROTO_TCP;
+	iphdr->srcaddr  = inet_addr("1.2.3.4");   //srcip.s_addr;
+	iphdr->destaddr = inet_addr("1.2.3.5");
+	iphdr->checksum =0;
+	iphdr->checksum = in_checksum((unsigned short*)iphdr, sizeof(ip_header));
+	tcphdr = (tcp_header*)(packet + sizeof(eth_header) + sizeof(ip_header));
+
+	tcphdr->sport = htons(2338);
+	tcphdr->dport = htons(80);
+	tcphdr->sequence=0;
+	tcphdr->acknowledge=0;
+	tcphdr->reserved=0;
+	tcphdr->data_offset=5;
+	tcphdr->fin=0;
+	tcphdr->syn=1;
+	tcphdr->rst=0;
+	tcphdr->psh=0;
+	tcphdr->ack=0;
+	tcphdr->urg=0;
+	tcphdr->ecn=0;
+	tcphdr->cwr=0;
+	tcphdr->window = htons(64240);
+	tcphdr->checksum=0;
+	tcphdr->urgent = 0;
 	return packet;
-}*/
-
-// Packet decoder - takes a packet and figures out protocol. Passes along to appropriate helper.
-void decode_packet(u_char *param, const struct pcap_pkthdr *header, const u_char *pkt_data) {
-
-	// Make timestamp readable.
-	time_t local = header->ts.tv_sec;
-	struct tm *time = localtime(&local);
-	char timestamp[16];
-	strftime(timestamp, sizeof timestamp, "%H:%M:%S", time);
-
-	// Get ip header
-	ip_header *ip = (ip_header *) (pkt_data + sizeof(eth_header));
-
-	// Figure out the protocol of the packet
-	switch(ip->proto) {
-		case 1: // ICMP
-			break;
-		case 2: // IGMP
-			break;
-		case 3: // IGMP
-			break;
-		case 4: // TCP
-			break;
-		case 5:// UDP
-			break;
-		case 6:// UDP
-			break;
-		default:
-			break;
-	}
 }
