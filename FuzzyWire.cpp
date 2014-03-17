@@ -33,7 +33,7 @@ typedef unsigned short u_short;
 
 // Winsock includes.
 #include <windows.h>
-#include <conio.h>
+//#include <conio.h>
 
 // Other headers in fuzzywire.
 #include "TcpConnection.h"
