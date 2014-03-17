@@ -129,9 +129,10 @@ int main() {
 		strftime(timestamp, sizeof timestamp, "%H:%M:%S", time);
 
 		// Print basic packet info
-		//fprintf(logfile , "\nNext Packet : %ld:%ld (Packet Length : %ld bytes) " , header->ts.tv_sec, header->ts.tv_usec, header->len);
+		fprintf(fp , "\nNext Packet : %s (Packet Length : %ld bytes) \n" , timestamp, header->len);
 		//fprintf(logfile , "\nNext Packet : %s.%ld (Packet Length : %ld bytes) " , buffer , header->ts.tv_usec, header->len);
 		ProcessPacket(data , header->caplen); // call processing function
+		fprintf(fp, "\n");
 	}
 	return 0;
 }
